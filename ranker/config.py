@@ -23,6 +23,13 @@ REFERENCE_DATE = dt.date(2026, 6, 1)
 # Embedding model
 # ---------------------------------------------------------------------------
 
+# EMBEDDING MODEL: keeping all-MiniLM-L6-v2.
+# BGE-small-en-v1.5 was benchmarked at 7/s on the Ryzen 7 7735HS CPU (4 hours
+# for 100K candidates vs 40 min for MiniLM). The 6x slowdown makes the upgrade
+# impractical within the submission timeline. MiniLM artifacts in artifacts/
+# remain valid and are used by rank.py as-is.
+#
+# If GPU becomes available, swap to "BAAI/bge-small-en-v1.5" and re-run embed.py.
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
 EMBED_BATCH_SIZE = 256
@@ -65,11 +72,61 @@ PENALTY_TITLE_CHASER = 0.60      # serial short-tenure job hopping
 PENALTY_CV_ONLY = 0.50           # CV/speech/robotics with no NLP/IR exposure
 PENALTY_STALE_HANDS_ON = 0.65    # 18+ months in pure architecture/leadership
 PENALTY_KEYWORD_STUFFER = 0.05   # AI skill list attached to a non-tech career
+# Soft penalty: research-flavoured title (AI Research Engineer, Research Scientist
+# etc.) at a product company whose current/recent role descriptions contain fewer
+# than RESEARCH_PROD_MIN_HITS production-deployment hits. The JD is explicit:
+# "research without production" is a disqualifier. We can't hard-exclude
+# because many "AI Research Engineer" titles at Indian product startups do ship;
+# we penalise proportionally and let structural evidence rescue good ones.
+PENALTY_RESEARCH_TITLE_NO_PROD = 0.75
+RESEARCH_PROD_MIN_HITS = 2  # minimum production_evidence hits to waive the penalty
 
 TITLE_CHASER_MIN_ROLES = 3
 TITLE_CHASER_MAX_AVG_TENURE_MONTHS = 20
 STALE_HANDS_ON_MONTHS = 18
 KEYWORD_STUFFER_MIN_JD_SKILLS = 4
+
+# ---------------------------------------------------------------------------
+# Tier-1 company prestige (career evidence bonus)
+# ---------------------------------------------------------------------------
+
+# Product/tech companies where shipping at scale is part of the job — not
+# consulting firms or IT services. Matched as a substring of career_history
+# company name (lowercase). Kept to companies where AI/ML at scale is
+# institutionalised so the bonus is a genuine signal, not flattery.
+TIER_1_COMPANIES = frozenset({
+    # Global top-tier product
+    "google", "meta", "microsoft", "apple", "amazon", "netflix", "openai",
+    "deepmind", "anthropic", "twitter", "linkedin", "uber", "airbnb",
+    "stripe", "salesforce", "nvidia",
+    # India tier-1 product (strong ML infra)
+    "zomato", "swiggy", "paytm", "phonepe", "razorpay", "cred", "meesho",
+    "flipkart", "ola", "byju", "unacademy", "freshworks", "zepto", "blinkit",
+    "sarvam", "yellow.ai", "observe.ai", "Mad Street Den",
+    "lenskart", "urban company", "policybazaar", "groww", "zerodha",
+    "navi", "slice", "healthifyme", "browserstack", "cleartax", "chargebee",
+    "postman", "hasura", "setu", "cashfree",
+})
+TIER_1_COMPANY_BONUS = 0.08  # added to career_evidence component score
+
+# ---------------------------------------------------------------------------
+# Recruiter-revealed behavioral signals
+# ---------------------------------------------------------------------------
+
+# saved_by_recruiters_30d: how many recruiters bookmarked this profile.
+# This is a revealed preference — recruiters already found this person
+# interesting, which is direct evidence of market fit for the role type.
+RECRUITER_SAVE_MAX = 5        # cap contribution at 5 saves
+RECRUITER_SAVE_BONUS = 0.01   # per save (max +0.05 multiplier)
+
+# profile_views_received_30d: passive visibility. Weakly correlated with
+# reachability, applied as a very small bonus to avoid over-weighting.
+PROFILE_VIEWS_THRESHOLD = 10  # views in 30d to qualify for bonus
+PROFILE_VIEWS_BONUS = 0.01
+
+# applications_submitted_30d: candidate is actively job-hunting — positive
+# availability signal complementary to open_to_work_flag.
+APP_SUBMITTED_BONUS = 0.02  # if applications_submitted_30d > 0
 
 # ---------------------------------------------------------------------------
 # Experience band (JD: "5-9 years ... a range, not a requirement")

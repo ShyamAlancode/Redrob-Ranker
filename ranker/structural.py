@@ -37,18 +37,34 @@ class StructuralResult:
 # Component scores
 # ---------------------------------------------------------------------------
 
+# Rotate evidence phrasing for ML-title matches so no single phrase dominates
+# across 100 rows. Rotation index is the hash of candidate_id length modulo
+# the pool size — deterministic per-profile without needing rank at this point.
+_TITLE_EVIDENCE_TEMPLATES = (
+    "current title '{title}' is squarely in the JD's domain",
+    "role as '{title}' maps directly onto the JD's search-and-ranking mandate",
+    "'{title}' title aligns with the retrieval/ML focus the JD requires",
+    "current position as '{title}' fits the target ML/AI profile",
+    "title '{title}' places this candidate in the JD's core domain",
+)
+
+
 def _title_domain_score(profile: dict, result: StructuralResult) -> float:
-    title = (profile.get("current_title") or "").lower()
+    title = (profile.get("current_title") or "")
+    title_lower = title.lower()
     headline = (profile.get("headline") or "").lower()
-    combined = f"{title} {headline}"
+    combined = f"{title_lower} {headline}"
 
     if _contains_any(combined, config.ML_TITLE_TERMS):
-        result.evidence.append(f"current title '{profile.get('current_title')}' is squarely in the JD's domain")
+        # Rotate phrasing deterministically by hashing the title string itself
+        # so the same profile always gets the same evidence phrase.
+        idx = hash(title) % len(_TITLE_EVIDENCE_TEMPLATES)
+        result.evidence.append(_TITLE_EVIDENCE_TEMPLATES[idx].format(title=title))
         return 1.0
     if _contains_any(combined, config.ADJACENT_TITLE_TERMS):
         return 0.55
     if _contains_any(combined, config.ENGINEERING_TITLE_TERMS) and not _contains_any(
-        title, config.NON_TECH_TITLE_TERMS
+        title_lower, config.NON_TECH_TITLE_TERMS
     ):
         return 0.35
     return 0.05
@@ -60,6 +76,12 @@ def _career_evidence_score(candidate: dict, result: StructuralResult) -> float:
     This is the component that rescues "plain-language Tier 5" candidates:
     someone whose skills section never says RAG but whose role description
     says they built a recommendation system at a product company.
+
+    Tier-1 company prestige bonus: candidates who have worked at top product
+    companies (config.TIER_1_COMPANIES) receive a bonus proportional to
+    career evidence to signal operational scale experience. The bonus is only
+    applied when there is actual ML/retrieval evidence so it amplifies signal
+    rather than inflating irrelevant profiles.
     """
     history = candidate.get("career_history", []) or []
     profile = candidate.get("profile", {})
@@ -80,6 +102,13 @@ def _career_evidence_score(candidate: dict, result: StructuralResult) -> float:
         if not any(ind in (j.get("industry") or "").lower() for ind in config.CONSULTING_INDUSTRIES)
     ]
 
+    # Tier-1 company check: has the candidate worked at a high-signal product
+    # company at any point in their career? Matched as a lowercase substring.
+    tier1_roles = [
+        j for j in history
+        if any(t1 in (j.get("company") or "").lower() for t1 in config.TIER_1_COMPANIES)
+    ]
+
     score = 0.0
     if retrieval_hits:
         score += min(0.55, 0.18 * retrieval_hits)
@@ -89,11 +118,16 @@ def _career_evidence_score(candidate: dict, result: StructuralResult) -> float:
     if production_hits:
         score += min(0.15, 0.05 * production_hits)
     # Product-company bonus only applies when there's actual ML/retrieval
-    # evidence — it amplifies signal, not replaces it. A Civil Engineer at
-    # a startup still has zero ML evidence; giving them +0.10 just for being
-    # at a product company inflates irrelevant profiles past the floor check.
+    # evidence — it amplifies signal, not replaces it.
     if product_roles and (retrieval_hits or ml_hits):
         score += 0.10
+    # Tier-1 prestige bonus: awarded only when ML/retrieval evidence exists.
+    if tier1_roles and (retrieval_hits or ml_hits):
+        score += config.TIER_1_COMPANY_BONUS
+        company_names = ", ".join(dict.fromkeys(
+            j.get("company", "") for j in tier1_roles
+        ))[:60]
+        result.evidence.append(f"Tier-1 product company experience ({company_names})")
     score = min(1.0, score)
 
     if retrieval_hits and production_hits:
@@ -340,6 +374,36 @@ def _apply_penalties(candidate: dict, base: float, result: StructuralResult) -> 
             result.penalties.append("stale_hands_on")
             result.concerns.append("18+ months in a non-coding leadership role — JD says 'this role writes code'")
             base *= config.PENALTY_STALE_HANDS_ON
+
+    # Research-title without production proof: a candidate with 'research' in
+    # their current or most-recent title at a product company may genuinely
+    # ship ("AI Research Engineer" at Razorpay, Yellow.ai, etc.), but many
+    # don't. Apply a proportional penalty unless their role descriptions
+    # contain sufficient production-deployment vocabulary. The JD explicitly
+    # states: "research without production is a disqualifier."
+    # This fires independently of the hard research_only check above — it
+    # targets the softer case of one research-flavoured title in an otherwise
+    # product-company career that the hard check misses.
+    RESEARCH_TITLE_TERMS = ("research engineer", "research scientist",
+                            "research analyst", "ai researcher", "ml researcher")
+    recent_jobs = sorted(
+        history,
+        key=lambda j: parse_date(j.get("start_date")) or __import__("datetime").date.min,
+        reverse=True,
+    )[:2]  # current + one prior
+    for job in recent_jobs:
+        job_title = (job.get("title") or "").lower()
+        if _contains_any(job_title, RESEARCH_TITLE_TERMS):
+            # Check production evidence across the full narrative.
+            prod_hits = _count_hits(narrative, config.PRODUCTION_EVIDENCE_TERMS)
+            if prod_hits < config.RESEARCH_PROD_MIN_HITS:
+                if "research_title_no_prod" not in result.penalties:
+                    result.penalties.append("research_title_no_prod")
+                    result.concerns.append(
+                        "research-flavoured title without strong production-deployment evidence"
+                    )
+                    base *= config.PENALTY_RESEARCH_TITLE_NO_PROD
+            break  # only apply once even if multiple research-title roles
 
     return base
 

@@ -445,3 +445,122 @@ def test_honeypot_never_outranks_clean_equivalent():
     s_clean = score_candidate(clean, 0.8)
     s_honey = score_candidate(honeypot, 0.95)  # even with higher semantic sim
     assert s_clean.final > s_honey.final * 5
+
+
+# ---------------------------------------------------------------------------
+# New tests: recruiter-revealed signals, tier-1 prestige, research-title penalty
+# ---------------------------------------------------------------------------
+
+def test_recruiter_saves_boost_behavioral():
+    """Candidates saved by recruiters score higher than those with zero saves."""
+    no_saves = make_candidate(cid="CAND_0001001")
+    no_saves["redrob_signals"]["saved_by_recruiters_30d"] = 0
+    five_saves = make_candidate(cid="CAND_0001002")
+    five_saves["redrob_signals"]["saved_by_recruiters_30d"] = 5
+    # Disable other positive signals so we stay below BEHAVIORAL_CEILING
+    for c in (no_saves, five_saves):
+        c["redrob_signals"]["open_to_work_flag"] = False
+        c["redrob_signals"]["github_activity_score"] = None
+        c["redrob_signals"]["verified_email"] = False
+        c["redrob_signals"]["verified_phone"] = False
+    m_zero = behavioral_multiplier(no_saves).multiplier
+    m_five = behavioral_multiplier(five_saves).multiplier
+    assert m_five > m_zero, f"saves boost failed: {m_zero:.4f} vs {m_five:.4f}"
+
+
+def test_active_applicant_boosted():
+    """Active applicants (applications_submitted_30d > 0) score above passive ones."""
+    signals_base = {
+        "last_active_date": "2026-03-01",
+        "recruiter_response_rate": 0.35,
+        "open_to_work_flag": False,
+        "interview_completion_rate": None,
+        "github_activity_score": None,
+        "verified_email": False,
+        "verified_phone": False,
+        "saved_by_recruiters_30d": 0,
+        "profile_views_received_30d": 0,
+        "notice_period_days": 30,
+        "preferred_work_mode": "hybrid",
+        "willing_to_relocate": True,
+    }
+    passive = make_candidate(cid="CAND_0001003", redrob_signals={**signals_base, "applications_submitted_30d": 0})
+    active = make_candidate(cid="CAND_0001004", redrob_signals={**signals_base, "applications_submitted_30d": 3})
+    m_passive = behavioral_multiplier(passive).multiplier
+    m_active = behavioral_multiplier(active).multiplier
+    assert m_active > m_passive, f"active applicant not boosted: {m_passive:.4f} vs {m_active:.4f}"
+
+
+def test_tier1_company_prestige_bonus():
+    """Candidate with Tier-1 product company (Google) should outscore identical no-Tier-1 candidate."""
+    no_tier1 = make_candidate(cid="CAND_0001005")
+    tier1_cand = make_candidate(cid="CAND_0001006")
+    tier1_cand["career_history"][1]["company"] = "Google"
+    r_base = structural_score(no_tier1)
+    r_tier1 = structural_score(tier1_cand)
+    assert r_tier1.score > r_base.score, (
+        f"Tier-1 bonus not applied: base={r_base.score:.4f} tier1={r_tier1.score:.4f}"
+    )
+    assert any("Tier-1" in e for e in r_tier1.evidence), (
+        f"Expected Tier-1 in evidence but got: {r_tier1.evidence}"
+    )
+
+
+def test_research_title_no_prod_is_penalized():
+    """AI Research Engineer with no production-deployment vocabulary => penalty.
+    Overrides profile summary and headline to strip base fixture production text."""
+    c = make_candidate(cid="CAND_0001007")
+    c["profile"]["current_title"] = "AI Research Engineer"
+    c["profile"]["summary"] = "Researching NLP model architectures and evaluation methods."
+    c["profile"]["headline"] = "AI Research Engineer | NLP"
+    c["career_history"] = [{
+        "company": "ProductStartup", "title": "AI Research Engineer",
+        "start_date": "2022-01-01", "end_date": None, "duration_months": 28,
+        "is_current": True, "industry": "Software", "company_size": "51-200",
+        "description": (
+            "Developed NLP models for text classification. Explored transformer "
+            "architectures, trained models on proprietary datasets, published reports."
+        ),
+    }]
+    result = structural_score(c)
+    assert "research_title_no_prod" in result.penalties, (
+        f"Expected research_title_no_prod penalty, got: {result.penalties}"
+    )
+
+
+def test_research_title_with_prod_is_not_penalized():
+    """AI Research Engineer with strong production-deployment evidence => no penalty."""
+    c = make_candidate(cid="CAND_0001008")
+    c["profile"]["current_title"] = "AI Research Engineer"
+    c["profile"]["summary"] = "Engineer who builds and ships ML ranking systems to production."
+    c["profile"]["headline"] = "AI Research Engineer | Production ML"
+    c["career_history"] = [{
+        "company": "ProductCo", "title": "AI Research Engineer",
+        "start_date": "2022-01-01", "end_date": None, "duration_months": 28,
+        "is_current": True, "industry": "Software", "company_size": "201-500",
+        "description": (
+            "Built and deployed NLP ranking systems to production serving 2M users. "
+            "Shipped a hybrid retrieval pipeline; monitored latency and A/B tested "
+            "recall vs precision. Responsible for full production inference stack."
+        ),
+    }]
+    result = structural_score(c)
+    assert "research_title_no_prod" not in result.penalties, (
+        f"research_title_no_prod incorrectly fired: {result.penalties}"
+    )
+
+
+def test_title_evidence_phrases_rotate():
+    """Different ML titles should yield at least 2 distinct evidence phrase templates."""
+    from ranker.structural import _title_domain_score, StructuralResult
+    titles = [
+        "Machine Learning Engineer", "Search Engineer", "NLP Engineer",
+        "AI Engineer", "Applied Scientist",
+    ]
+    seen_phrases = set()
+    for title in titles:
+        r = StructuralResult()
+        _title_domain_score({"current_title": title, "headline": ""}, r)
+        if r.evidence:
+            seen_phrases.add(r.evidence[0])
+    assert len(seen_phrases) >= 2, f"phrases not rotating: {seen_phrases}"

@@ -93,5 +93,29 @@ def behavioral_multiplier(candidate: dict) -> BehavioralResult:
     if signals.get("verified_email") and signals.get("verified_phone"):
         m *= 1.02
 
+    # -- Recruiter-revealed preference signals --------------------------------
+    # saved_by_recruiters_30d: recruiters have already found this profile
+    # interesting in the last 30 days — a direct revealed preference signal
+    # from people making hiring decisions, stronger than self-reported
+    # open_to_work_flag. Capped so a viral profile doesn't dominate.
+    saves = signals.get("saved_by_recruiters_30d") or 0
+    if saves > 0:
+        save_bonus = 1.0 + config.RECRUITER_SAVE_BONUS * min(saves, config.RECRUITER_SAVE_MAX)
+        m *= save_bonus
+        result.notes.append(f"saved by {saves} recruiter(s) in the last 30 days")
+
+    # profile_views_received_30d: passive visibility signal. A high view count
+    # without any saves is weak (could be curiosity), so the bonus is small.
+    views = signals.get("profile_views_received_30d") or 0
+    if views >= config.PROFILE_VIEWS_THRESHOLD:
+        m *= (1.0 + config.PROFILE_VIEWS_BONUS)
+
+    # applications_submitted_30d: candidate is actively job-hunting right now.
+    # Complements open_to_work_flag with revealed behaviour rather than stated intent.
+    apps = signals.get("applications_submitted_30d") or 0
+    if apps > 0:
+        m *= (1.0 + config.APP_SUBMITTED_BONUS)
+        result.notes.append("actively applying to roles")
+
     result.multiplier = max(config.BEHAVIORAL_FLOOR, min(config.BEHAVIORAL_CEILING, m))
     return result
