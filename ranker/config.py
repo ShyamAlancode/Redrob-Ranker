@@ -20,63 +20,19 @@ import datetime as dt
 REFERENCE_DATE = dt.date(2026, 6, 1)
 
 # ---------------------------------------------------------------------------
-# Embedding model
-# ---------------------------------------------------------------------------
+# Additive weights for the hackathon constraints
+W_CAREER_RELEVANCE = 0.45
+W_SKILLS_MATCH = 0.20
+W_EXPERIENCE_MATCH = 0.15
+W_BEHAVIOR_SCORE = 0.10
+W_TRUST_SCORE = 0.10
 
-# EMBEDDING MODEL: finalized to sentence-transformers/all-MiniLM-L6-v2.
-# This model was chosen for its high efficiency on CPU (benchmarked at ~41/s,
-# embedding the entire 100K candidate pool in ~40 minutes) and excellent
-# compatibility with the deployment environment constraints.
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-EMBEDDING_DIM = 384
-EMBED_BATCH_SIZE = 256
-
-# Career-history text used for embedding: most recent N roles, each truncated.
-EMBED_CAREER_ENTRIES = 3
-EMBED_CAREER_CHARS = 300
-
-# ---------------------------------------------------------------------------
-# Final score composition
-# ---------------------------------------------------------------------------
-
-# final = (W_SEMANTIC * semantic + W_STRUCTURAL * structural)
-#         * behavioral_multiplier * integrity_multiplier
-#
-# Structural dominates because the JD is rule-heavy: it spells out explicit
-# disqualifiers (consulting-only, research-only, stale hands-on, ...) that an
-# embedding similarity cannot see. Semantic similarity is kept at 0.40 to
-# surface "plain-language Tier 5" candidates whose descriptions match the role
-# without using the fashionable vocabulary.
-W_SEMANTIC = 0.40
-W_STRUCTURAL = 0.60
-
-# ---------------------------------------------------------------------------
-# Structural sub-weights (sum to 1.0)
-# ---------------------------------------------------------------------------
-
-STRUCT_WEIGHTS = {
-    "title_domain": 0.30,   # is this person actually an ML/search/IR engineer
-    "career_evidence": 0.30, # shipped retrieval/ranking/reco at product companies
-    "experience_band": 0.15, # JD band 5-9y, soft edges
-    "skills_trust": 0.15,    # JD skills weighted by endorsements + duration
-    "logistics": 0.10,       # location, notice period, relocation, work mode
-}
-
-# Penalty multipliers applied on top of the weighted structural score.
-PENALTY_CONSULTING_ONLY = 0.25   # entire career in IT services/consulting
-PENALTY_RESEARCH_ONLY = 0.30     # research roles only, no production signal
-PENALTY_TITLE_CHASER = 0.60      # serial short-tenure job hopping
-PENALTY_CV_ONLY = 0.50           # CV/speech/robotics with no NLP/IR exposure
-PENALTY_STALE_HANDS_ON = 0.65    # 18+ months in pure architecture/leadership
-PENALTY_KEYWORD_STUFFER = 0.05   # AI skill list attached to a non-tech career
-# Soft penalty: research-flavoured title (AI Research Engineer, Research Scientist
-# etc.) at a product company whose current/recent role descriptions contain fewer
-# than RESEARCH_PROD_MIN_HITS production-deployment hits. The JD is explicit:
-# "research without production" is a disqualifier. We can't hard-exclude
-# because many "AI Research Engineer" titles at Indian product startups do ship;
-# we penalise proportionally and let structural evidence rescue good ones.
-PENALTY_RESEARCH_TITLE_NO_PROD = 0.75
-RESEARCH_PROD_MIN_HITS = 2  # minimum production_evidence hits to waive the penalty
+# Additive penalties applied to trust score
+PENALTY_CONSULTING_ONLY = 4.0    # consulting background + no AI/ML evidence
+PENALTY_RESEARCH_ONLY = 6.0      # pure research background, no production signal
+PENALTY_TITLE_CHASER = 5.0       # frequent job hopping
+PENALTY_CV_ONLY = 10.0           # CV/speech/robotics only with no NLP/IR
+PENALTY_STALE_HANDS_ON = 5.0     # non-coding leadership role 18+ months
 
 TITLE_CHASER_MIN_ROLES = 3
 TITLE_CHASER_MAX_AVG_TENURE_MONTHS = 20
@@ -166,6 +122,75 @@ HONEYPOT_EXPERT_ZERO_DURATION_MIN = 3  # >=3 "expert" skills never actually used
 # ---------------------------------------------------------------------------
 # Lexicons (lowercase substring matching)
 # ---------------------------------------------------------------------------
+
+SYNONYM_GROUPS = [
+    {"retrieval", "search", "vector search", "search infrastructure"},
+    {"recommendation", "recommender", "ranking", "personalization"},
+    {"llm", "transformer", "genai"},
+    {"nlp", "natural language processing"}
+]
+
+AI_KEYWORDS = [
+    "machine learning",
+    "ml",
+    "recommendation",
+    "ranking",
+    "retrieval",
+    "nlp",
+    "llm",
+    "transformer",
+    "computer vision",
+    "deep learning",
+    "gan",
+    "gans",
+    "pytorch",
+    "tensorflow"
+]
+
+
+def get_dynamic_weights(jd_text: str) -> dict[str, float]:
+    """Classify the job description type and return dynamic component weights."""
+    jd_lower = (jd_text or "").lower()
+    title_area = "\n".join(jd_lower.splitlines()[:5])
+
+    # Default weights
+    career = 0.45
+    skills = 0.20
+    experience = 0.15
+    behavior = 0.10
+    trust = 0.10
+    education = 0.00
+
+    # Classify JD based on priority order: Title first, then body text.
+    if "research" in title_area or "scientist" in title_area:
+        education += 0.10
+        career -= 0.05
+    elif "mlops" in title_area or "platform" in title_area or "infrastructure" in title_area:
+        skills += 0.10
+        career -= 0.05
+    elif "engineer" in title_area or "backend" in title_area or "ranking" in title_area:
+        career = 0.45
+        skills = 0.20
+    elif "research" in jd_lower or "scientist" in jd_lower:
+        education += 0.10
+        career -= 0.05
+    elif "mlops" in jd_lower or "platform" in jd_lower or "infrastructure" in jd_lower:
+        skills += 0.10
+        career -= 0.05
+    elif "engineer" in jd_lower or "backend" in jd_lower or "ranking" in jd_lower:
+        career = 0.45
+        skills = 0.20
+
+    return {
+        "career_relevance": career,
+        "skills_match": skills,
+        "experience_match": experience,
+        "behavior_score": behavior,
+        "trust_score": trust,
+        "education_match": education
+    }
+
+
 
 # Skills the JD names directly or by family ("things you absolutely need" +
 # "things we'd like").

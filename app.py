@@ -20,8 +20,7 @@ import pandas as pd
 import streamlit as st
 
 from ranker import config
-from ranker.loading import build_candidate_document, load_candidates_blob, load_job_description
-from ranker.pipeline import select_top, write_submission
+from ranker.loading import load_candidates_blob, load_job_description
 
 MAX_SAMPLE = 100
 JD_PATH = Path("data/job_description.txt")
@@ -31,15 +30,10 @@ st.title("redrob-ranker — sandbox")
 st.caption(
     "Intelligent Candidate Discovery (India Runs, Track 1). Upload a candidate "
     f"sample (≤{MAX_SAMPLE}, JSON / JSONL / JSONL.GZ) and get the ranked CSV. "
-    "Scoring is identical to the full 100K pipeline; sample embeddings are "
-    "computed live on CPU."
+    "Scoring is identical to the full 100K pipeline."
 )
 
 
-@st.cache_resource(show_spinner="Loading embedding model (first run only)...")
-def get_model():
-    from sentence_transformers import SentenceTransformer
-    return SentenceTransformer(config.EMBEDDING_MODEL, device="cpu")
 
 
 @st.cache_data
@@ -67,22 +61,17 @@ if uploaded is not None:
     st.write(f"Parsed **{len(candidates)}** candidates.")
 
     if st.button("Run ranking", type="primary"):
-        model = get_model()
-        with st.spinner("Embedding sample + JD..."):
-            jd_vec = model.encode(get_jd_text(), normalize_embeddings=True)
-            docs = [build_candidate_document(c) for c in candidates]
-            vecs = model.encode(docs, normalize_embeddings=True, show_progress_bar=False)
-            sims = np.asarray(vecs) @ np.asarray(jd_vec)
-            lo, hi = float(sims.min()), float(sims.max())
-            span = (hi - lo) or 1.0
-            lookup = {
-                c["candidate_id"]: float((s - lo) / span)
-                for c, s in zip(candidates, sims)
-            }
-
         with st.spinner("Scoring..."):
-            ranked = select_top(iter(candidates), lookup.get, top_k=min(top_k, len(candidates)))
-            # write_submission expects a path; reuse its CSV logic via a temp file.
+            from precompute import process_candidate
+            records = [process_candidate(c) for c in candidates]
+            df_candidates = pd.DataFrame(records)
+            
+            from ranker.structural import parse_job_description
+            jd_info = parse_job_description(get_jd_text())
+            
+            from ranker.pipeline import select_top, write_submission
+            ranked = select_top(df_candidates, jd_info, top_k=min(top_k, len(candidates)))
+            
             out_path = Path("sandbox_output.csv")
             write_submission(ranked, out_path)
             csv_text = out_path.read_text(encoding="utf-8")
@@ -91,11 +80,9 @@ if uploaded is not None:
         st.subheader("Ranked output")
         st.dataframe(df, use_container_width=True, hide_index=True)
 
-        flagged = sum(1 for sc in ranked if sc.integrity.is_suspect)
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         col1.metric("Candidates scored", len(candidates))
         col2.metric("Rows ranked", len(ranked))
-        col3.metric("Integrity-flagged in output", flagged)
 
         st.download_button(
             "Download CSV", csv_text, file_name="sandbox_ranked.csv", mime="text/csv"
@@ -105,11 +92,9 @@ if uploaded is not None:
             for sc in ranked[:10]:
                 st.markdown(
                     f"**{sc.candidate_id}** — final `{sc.final:.4f}` "
-                    f"(semantic `{sc.semantic:.2f}`, structural `{sc.structural.score:.2f}`, "
-                    f"behavioral ×`{sc.behavioral.multiplier:.2f}`, "
-                    f"integrity ×`{sc.integrity.multiplier:.2f}`)"
+                    f"(career relevance `{sc.career_relevance:.2f}`, skills match `{sc.skills_match:.2f}`, "
+                    f"experience match `{sc.experience_match:.2f}`, "
+                    f"behavior score `{sc.behavior_score:.2f}`, trust score `{sc.trust_score:.2f}`)"
                 )
-                if sc.structural.penalties:
-                    st.markdown(f"&nbsp;&nbsp;penalties: `{', '.join(sc.structural.penalties)}`")
 else:
     st.info("Upload a candidate file to begin. `sample_candidates.json` from the bundle works as-is.")
