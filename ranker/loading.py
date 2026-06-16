@@ -80,32 +80,34 @@ def build_candidate_document(candidate: dict) -> str:
     plain-language strong candidates describe what they actually built.
     """
     profile = candidate.get("profile", {})
-    parts = [
-        profile.get("headline", ""),
-        profile.get("summary", ""),
-        f"Current role: {profile.get('current_title', '')} at "
-        f"{profile.get('current_company', '')} ({profile.get('current_industry', '')}).",
-    ]
-
-    history = candidate.get("career_history", [])
-    # Most recent first; the schema does not guarantee order, so sort.
+    history = candidate.get("career_history", []) or []
+    skills = candidate.get("skills", []) or []
+    
+    parts = []
+    # Headline and summary carry dense self-description
+    if profile.get("headline"):
+        parts.append(profile["headline"])
+    if profile.get("summary"):
+        parts.append(profile["summary"][:400])
+    
+    # Top career entries
     history = sorted(
         history,
         key=lambda j: parse_date(j.get("start_date")) or dt.date.min,
         reverse=True,
     )
-    for job in history[: config.EMBED_CAREER_ENTRIES]:
-        desc = (job.get("description") or "")[: config.EMBED_CAREER_CHARS]
-        parts.append(f"{job.get('title', '')} at {job.get('company', '')}: {desc}")
-
-    skills = candidate.get("skills", [])
-    # Only carry skills with real usage time into the embedding -- this is a
-    # cheap pre-filter against stuffed skill lists.
-    used = [s["name"] for s in skills if s.get("duration_months", 0) >= 6]
-    if used:
-        parts.append("Skills used in practice: " + ", ".join(used[:20]))
-
-    return "\n".join(p for p in parts if p)
+    for job in history[:3]:
+        desc = (job.get("description") or "")[:300]
+        title = job.get("title", "")
+        parts.append(f"{title}: {desc}")
+    
+    # Top skills by endorsements (proxy for real usage)
+    top_skills = sorted(skills, key=lambda s: s.get("endorsements", 0), reverse=True)[:8]
+    skill_names = ", ".join(s.get("name", "") for s in top_skills)
+    if skill_names:
+        parts.append(f"Skills: {skill_names}")
+    
+    return " | ".join(parts)
 
 
 def load_job_description(path: str | Path) -> str:

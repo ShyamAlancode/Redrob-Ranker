@@ -71,76 +71,97 @@ def behavioral_multiplier(candidate: dict) -> BehavioralResult:
     else:
         m *= 0.90
 
-    # -- Process reliability --------------------------------------------------
-    icr = signals.get("interview_completion_rate")
-    if icr is not None and icr < 0.5:
-        m *= 0.85
-        result.concerns.append(f"completes only {icr:.0%} of scheduled interviews")
-
-    # -- External validation ("we need to see how you think") ----------------
-    # JD disqualifier proxy: 5+ years of closed-source work with no external
-    # validation. github_activity_score is the only observable signal for it
-    # (-1 = no GitHub linked), so the adjustment is deliberately small.
-    gh = signals.get("github_activity_score")
-    if gh is not None:
-        if gh >= 50:
-            m *= 1.03
-            result.notes.append(f"active public GitHub (score {gh:.0f})")
-        elif gh == -1:
-            m *= 0.97
-
-    # -- Identity verification (small, but cheap trust signal) ---------------
-    if signals.get("verified_email") and signals.get("verified_phone"):
-        m *= 1.02
-
     # -- Recruiter-revealed preference signals --------------------------------
-    # saved_by_recruiters_30d: recruiters have already found this profile
-    # interesting in the last 30 days — a direct revealed preference signal
-    # from people making hiring decisions, stronger than self-reported
-    # open_to_work_flag. Capped so a viral profile doesn't dominate.
     saves = signals.get("saved_by_recruiters_30d") or 0
     if saves > 0:
         save_bonus = 1.0 + config.RECRUITER_SAVE_BONUS * min(saves, config.RECRUITER_SAVE_MAX)
         m *= save_bonus
         result.notes.append(f"saved by {saves} recruiter(s) in the last 30 days")
 
-    # profile_views_received_30d: passive visibility signal. A high view count
-    # without any saves is weak (could be curiosity), so the bonus is small.
     views = signals.get("profile_views_received_30d") or 0
     if views >= config.PROFILE_VIEWS_THRESHOLD:
         m *= (1.0 + config.PROFILE_VIEWS_BONUS)
 
-    # applications_submitted_30d: candidate is actively job-hunting right now.
-    # Complements open_to_work_flag with revealed behaviour rather than stated intent.
     apps = signals.get("applications_submitted_30d") or 0
     if apps > 0:
         m *= (1.0 + config.APP_SUBMITTED_BONUS)
         result.notes.append("actively applying to roles")
 
-    # -- Additional Signals ---------------------------------------------------
+    # -- Phase 1.3: 6 Missing Behavioral Signals ------------------------------
+
+    # github_activity_score: JD explicitly values open-source + code quality
+    github = signals.get("github_activity_score")
+    if github is None:
+        github = -1
+
+    if github == -1:
+        github_mult = 1.0
+    elif github >= 60:
+        github_mult = 1.05  # active coder bonus
+        result.notes.append(f"active public GitHub (score {github:.0f})")
+    elif github < 20:
+        github_mult = 0.95  # inactive coder soft penalty
+    else:
+        github_mult = 1.0
+
+    # interview_completion_rate: strong reliability/availability signal
+    icr = signals.get("interview_completion_rate")
+    if icr is None:
+        icr = 0.5
+
+    if icr < 0.4:
+        interview_mult = 0.85
+        result.concerns.append(f"completes only {icr:.0%} of scheduled interviews")
+    elif icr > 0.8:
+        interview_mult = 1.05
+    else:
+        interview_mult = 1.0
+
+    # offer_acceptance_rate: -1 means no prior offers (new to market = neutral)
     oar = signals.get("offer_acceptance_rate")
-    if oar is not None and oar != -1:
-        if oar < 0.3:
-            m *= 0.90
-            result.concerns.append(f"low historical offer acceptance rate ({oar:.0%})")
-        elif oar >= 0.8:
-            m *= 1.02
+    if oar is None:
+        oar = -1
 
+    if oar == -1:
+        offer_mult = 1.0  # no history = neutral
+    elif oar < 0.2:
+        offer_mult = 0.92  # serial rejector = availability risk
+        result.concerns.append(f"low historical offer acceptance rate ({oar:.0%})")
+    else:
+        offer_mult = 1.0
+
+    # profile_completeness_score: incomplete profile = lower trust in all signals
     pcs = signals.get("profile_completeness_score")
-    if pcs is not None:
-        if pcs < 50:
-            m *= 0.95
-            result.concerns.append(f"incomplete profile (score {pcs:.0f})")
-        elif pcs >= 90:
-            m *= 1.02
+    if pcs is None:
+        pcs = 70
 
-    art = signals.get("avg_response_time_hours")
-    if art is not None:
-        if art > 72:
-            m *= 0.90
-            result.concerns.append(f"slow response time (~{art:.0f} hours)")
-        elif art <= 24:
-            m *= 1.02
+    if pcs < 50:
+        completeness_mult = 0.95
+        result.concerns.append(f"incomplete profile (score {pcs:.0f})")
+    else:
+        completeness_mult = 1.0
+
+    # avg_response_time_hours: < 24h = eager, > 168h (1 week) = slow
+    rth = signals.get("avg_response_time_hours")
+    if rth is None:
+        rth = 48
+
+    if rth < 24:
+        response_time_mult = 1.02
+    elif rth > 168:
+        response_time_mult = 0.95
+        result.concerns.append(f"slow response time (~{rth:.0f} hours)")
+    else:
+        response_time_mult = 1.0
+
+    # verified_email + verified_phone: reachability, both verified = tiny bonus
+    verified = (signals.get("verified_email", False) and 
+                signals.get("verified_phone", False))
+    verified_mult = 1.01 if verified else 0.98
+
+    # Compose into final behavioral multiplier
+    extra = github_mult * interview_mult * offer_mult * completeness_mult * response_time_mult * verified_mult
+    m *= extra
 
     result.multiplier = max(config.BEHAVIORAL_FLOOR, min(config.BEHAVIORAL_CEILING, m))
     return result

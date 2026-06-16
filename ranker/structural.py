@@ -218,7 +218,32 @@ def _logistics_score(candidate: dict, result: StructuralResult) -> float:
     mode = signals.get("preferred_work_mode", "flexible")
     mode_score = 1.0 if mode in ("hybrid", "flexible", "onsite") else 0.75  # remote-only vs hybrid JD
 
-    return 0.55 * loc + 0.30 * notice_score + 0.15 * mode_score
+    # Series A senior AI engineer realistic range: 30-70 LPA
+    sal = signals.get("expected_salary_range_inr_lpa", {})
+    sal_mid = (sal.get("min", 0) + sal.get("max", 0)) / 2
+    if 25 <= sal_mid <= 75:
+        salary_compat = 1.0   # right band
+    elif sal_mid > 100:
+        salary_compat = 0.85  # overpriced for Series A, soft signal
+    else:
+        salary_compat = 1.0   # underbidding or missing = neutral
+
+    return (0.55 * loc + 0.30 * notice_score + 0.15 * mode_score) * salary_compat
+
+
+# ---------------------------------------------------------------------------
+# Education Tier (JD: "founding team proxy")
+# ---------------------------------------------------------------------------
+
+def _education_tier_score(candidate: dict, result: StructuralResult) -> float:
+    edu = candidate.get("education", []) or []
+    if not edu:
+        return 0.5  # neutral
+    best_tier = min(  # tier_1 is "best", tier_4 is weakest
+        (e.get("tier", "tier_4") for e in edu),
+        key=lambda t: {"tier_1": 1, "tier_2": 2, "tier_3": 3, "tier_4": 4}.get(t, 4)
+    )
+    return {"tier_1": 1.0, "tier_2": 0.75, "tier_3": 0.50, "tier_4": 0.30}.get(best_tier, 0.5)
 
 
 # ---------------------------------------------------------------------------
@@ -422,6 +447,7 @@ def structural_score(candidate: dict) -> StructuralResult:
         "career_evidence": _career_evidence_score(candidate, result),
         "experience_band": _experience_band_score(profile, result),
         "skills_trust": _skills_trust_score(candidate, result),
+        "education_tier": _education_tier_score(candidate, result),
         "logistics": _logistics_score(candidate, result),
     }
     base = sum(config.STRUCT_WEIGHTS[k] * v for k, v in components.items())

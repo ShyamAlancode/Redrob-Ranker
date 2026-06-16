@@ -101,8 +101,6 @@ def check_integrity(candidate: dict) -> IntegrityReport:
     if signup and last_active and last_active < signup:
         report.soft_flags.append("last active before signup date")
 
-    # Assessment scores for skills the candidate doesn't list (0% base rate
-    # in the sample -- genuinely odd when present).
     listed = {s.get("name", "").lower() for s in skills}
     assessed = signals.get("skill_assessment_scores") or {}
     phantom = [name for name in assessed if name.lower() not in listed]
@@ -110,5 +108,17 @@ def check_integrity(candidate: dict) -> IntegrityReport:
         report.soft_flags.append(
             f"assessments exist for unlisted skills: {', '.join(phantom[:3])}"
         )
+
+    # -- 5. Micro-company long tenure (Type 3) -----------------------------
+    for job in history:
+        if (job.get("company_size") == "1-10" and 
+            job.get("duration_months", 0) > 120):  # 10+ years at a micro company
+            report.soft_flags.append("micro_company_long_tenure")
+
+    # -- 6. Career duration inflation (Type 4) -----------------------------
+    total_months = sum(j.get("duration_months", 0) for j in history)
+    yoe_months = float(profile.get("years_of_experience") or 0.0) * 12
+    if total_months > yoe_months + 24:  # more than 2 years gap
+        report.soft_flags.append("career_duration_inflation")
 
     return report

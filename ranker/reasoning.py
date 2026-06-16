@@ -29,6 +29,18 @@ from .behavioral import BehavioralResult
 from .structural import StructuralResult
 
 
+PENALTY_PHRASES = {
+    "consulting_only":   "entire career at IT-services firms (TCS/Infosys/etc.) — JD's explicit disqualifier",
+    "keyword_stuffer":   "AI skill list inconsistent with non-technical career trajectory",
+    "langchain_only":    "ML experience limited to recent LLM-wrapper work, no pre-LLM production history",
+    "stale_hands_on":    "18+ months in architecture/leadership role — JD requires active code writing",
+    "research_only":     "research-only background, no production deployment signal",
+    "title_chaser":      "frequent short stints averaging <20 months — JD needs 3+ year commitment",
+    "abroad":            "based outside India — JD does not sponsor visas",
+    "irrelevant_career": "no ML/retrieval background found in title or career history",
+}
+
+
 def _facts(candidate: dict, structural: StructuralResult, behavioral: BehavioralResult) -> dict:
     profile = candidate.get("profile", {})
     components = structural.components or {}
@@ -39,7 +51,7 @@ def _facts(candidate: dict, structural: StructuralResult, behavioral: Behavioral
         "location": profile.get("location") or "",
         "skills": structural.matched_skills[:3],
         "evidence": structural.evidence,
-        "concerns": structural.concerns + behavioral.concerns,
+        "concerns": [PENALTY_PHRASES.get(p, p) for p in structural.penalties] + structural.concerns + behavioral.concerns,
         "notes": behavioral.notes,
         "response_rate": behavioral.response_rate,
         "days_inactive": behavioral.days_inactive,

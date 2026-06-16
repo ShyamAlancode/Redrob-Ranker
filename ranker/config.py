@@ -59,7 +59,8 @@ STRUCT_WEIGHTS = {
     "career_evidence": 0.30, # shipped retrieval/ranking/reco at product companies
     "experience_band": 0.15, # JD band 5-9y, soft edges
     "skills_trust": 0.15,    # JD skills weighted by endorsements + duration
-    "logistics": 0.10,       # location, notice period, relocation, work mode
+    "education_tier": 0.05,  # IIT/BITS/IISc proxy
+    "logistics": 0.05,       # location, notice period, relocation, work mode
 }
 
 # Penalty multipliers applied on top of the weighted structural score.
