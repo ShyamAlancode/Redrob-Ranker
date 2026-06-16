@@ -99,7 +99,7 @@ TIER_1_COMPANIES = frozenset({
     # India tier-1 product (strong ML infra)
     "zomato", "swiggy", "paytm", "phonepe", "razorpay", "cred", "meesho",
     "flipkart", "ola", "byju", "unacademy", "freshworks", "zepto", "blinkit",
-    "sarvam", "yellow.ai", "observe.ai", "Mad Street Den",
+    "sarvam", "yellow.ai", "observe.ai", "mad street den",
     "lenskart", "urban company", "policybazaar", "groww", "zerodha",
     "navi", "slice", "healthifyme", "browserstack", "cleartax", "chargebee",
     "postman", "hasura", "setu", "cashfree",
