@@ -123,6 +123,8 @@ _TITLE_EVIDENCE_TEMPLATES = (
 def _title_domain_score(profile: dict, result: StructuralResult) -> float:
     title = (profile.get("current_title") or "")
     title_lower = title.lower()
+    if _contains_any(title_lower, config.NON_TECH_TITLE_TERMS):
+        return 0.05
     headline = (profile.get("headline") or "").lower()
     combined = f"{title_lower} {headline}"
 
@@ -145,7 +147,7 @@ def _title_domain_score(profile: dict, result: StructuralResult) -> float:
     return 0.05
 
 
-def _career_evidence_score(candidate: dict, result: StructuralResult) -> float:
+def _career_evidence_score(candidate: dict, result: StructuralResult, narrative: str) -> float:
     """Evidence of having built retrieval/ranking/ML systems in production.
 
     This is the component that rescues "plain-language Tier 5" candidates:
@@ -160,14 +162,11 @@ def _career_evidence_score(candidate: dict, result: StructuralResult) -> float:
     """
     history = candidate.get("career_history", []) or []
     profile = candidate.get("profile", {})
-    narrative = " ".join(
-        [(profile.get("summary") or ""), (profile.get("headline") or "")]
-        + [(j.get("description") or "") for j in history]
-    ).lower()
+    history_narrative = " ".join((j.get("description") or "") for j in history).lower()
 
-    retrieval_hits = _count_hits(narrative, config.RETRIEVAL_EVIDENCE_TERMS)
-    production_hits = _count_hits(narrative, config.PRODUCTION_EVIDENCE_TERMS)
-    ml_hits = _count_hits(narrative, config.ML_EVIDENCE_TERMS)
+    retrieval_hits = _count_hits(history_narrative, config.RETRIEVAL_EVIDENCE_TERMS)
+    production_hits = _count_hits(history_narrative, config.PRODUCTION_EVIDENCE_TERMS)
+    ml_hits = _count_hits(history_narrative, config.ML_EVIDENCE_TERMS)
 
     # Product-company exposure: any role outside services/consulting.
     # Use substring containment (same fix as consulting_only penalty) so that
@@ -326,13 +325,10 @@ def _education_tier_score(candidate: dict, result: StructuralResult) -> float:
 # JD disqualifier penalties
 # ---------------------------------------------------------------------------
 
-def _apply_penalties(candidate: dict, base: float, result: StructuralResult) -> float:
+def _apply_penalties(candidate: dict, base: float, result: StructuralResult, narrative: str) -> float:
     profile = candidate.get("profile", {})
     history = candidate.get("career_history", []) or []
     title = (profile.get("current_title") or "").lower()
-    narrative = " ".join(
-        [(profile.get("summary") or "")] + [(j.get("description") or "") for j in history]
-    ).lower()
 
     # Keyword stuffer: JD-perfect skill list attached to a non-technical
     # career. "A candidate who has all the AI keywords listed as skills but
@@ -501,10 +497,17 @@ def _apply_penalties(candidate: dict, base: float, result: StructuralResult) -> 
 def structural_score(candidate: dict) -> StructuralResult:
     result = StructuralResult()
     profile = candidate.get("profile", {})
+    history = candidate.get("career_history", []) or []
+
+    # Build narrative ONCE — both _career_evidence_score and _apply_penalties need it.
+    narrative = " ".join(
+        [(profile.get("summary") or ""), (profile.get("headline") or "")]
+        + [(j.get("description") or "") for j in history]
+    ).lower()
 
     components = {
         "title_domain": _title_domain_score(profile, result),
-        "career_evidence": _career_evidence_score(candidate, result),
+        "career_evidence": _career_evidence_score(candidate, result, narrative),
         "experience_band": _experience_band_score(profile, result),
         "skills_trust": _skills_trust_score(candidate, result),
         "education_tier": _education_tier_score(candidate, result),
@@ -512,6 +515,17 @@ def structural_score(candidate: dict) -> StructuralResult:
     }
     base = sum(config.STRUCT_WEIGHTS[k] * v for k, v in components.items())
     result.components = components
+
+    # Check if they have ever held any technical role in history
+    has_tech_title = False
+    for j in history:
+        j_title = (j.get("title") or "").lower()
+        if _contains_any(j_title, config.ENGINEERING_TITLE_TERMS) and not _contains_any(j_title, config.NON_TECH_TITLE_TERMS):
+            has_tech_title = True
+            break
+
+    title_lower = (profile.get("current_title") or "").lower()
+    is_non_tech = _contains_any(title_lower, config.NON_TECH_TITLE_TERMS)
 
     # Hard floor for wholly irrelevant careers (Civil Engineers, Accountants,
     # HR Managers, etc.) that score near zero on both title and career evidence.
@@ -521,10 +535,12 @@ def structural_score(candidate: dict) -> StructuralResult:
     # <= 0.15 (no retrieval/ML narrative; the 0.10 product-roles bonus can
     # push career_evidence to 0.10–0.15 even for wholly irrelevant profiles,
     # so we use 0.15 as the ceiling, not 0.05).
-    if components["title_domain"] <= 0.05 and components["career_evidence"] <= 0.15:
+    # Tightened irrelevant career check: also fires if the current title is
+    # explicitly non-tech and they have never held a technical title.
+    if (components["title_domain"] <= 0.05 and components["career_evidence"] <= 0.15) or (is_non_tech and not has_tech_title):
         result.penalties.append("irrelevant_career")
         result.concerns.append("no ML/retrieval background found in title or career history")
         base = min(base, 0.08)
 
-    result.score = max(0.0, min(1.0, _apply_penalties(candidate, base, result)))
+    result.score = max(0.0, min(1.0, _apply_penalties(candidate, base, result, narrative)))
     return result
