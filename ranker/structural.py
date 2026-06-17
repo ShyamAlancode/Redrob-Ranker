@@ -67,6 +67,17 @@ _RESEARCH_FLAVORED_TITLES: tuple[str, ...] = (
 # "rag" in "storage", "e5" in "e5500", "nlp" in "nlp" substring of longer words.
 _JD_SKILL_LONG:  frozenset[str] = frozenset(s for s in config.JD_SKILLS if len(s) >= 5)
 _JD_SKILL_SHORT: frozenset[str] = frozenset(s for s in config.JD_SKILLS if len(s) <  5)
+_JD_SKILL_SHORT_REGEX: re.Pattern = re.compile(
+    r'\b(' + '|'.join(re.escape(s) for s in _JD_SKILL_SHORT) + r')\b'
+)
+
+_NLP_POSITIVE_COMPILED: tuple[re.Pattern, ...] = tuple(
+    re.compile(r'\b' + re.escape(t) + r'\b') for t in _NLP_POSITIVE_TERMS
+)
+
+_TIER_1_COMPANIES_REGEX: re.Pattern = re.compile(
+    r'\b(' + '|'.join(re.escape(t1) for t1 in config.TIER_1_COMPANIES) + r')\b'
+)
 
 
 def _skill_matches_jd(name: str) -> bool:
@@ -80,9 +91,8 @@ def _skill_matches_jd(name: str) -> bool:
     for token in _JD_SKILL_LONG:
         if token in name or name in token:
             return True
-    for token in _JD_SKILL_SHORT:
-        if re.search(r'\b' + re.escape(token) + r'\b', name):
-            return True
+    if _JD_SKILL_SHORT_REGEX.search(name):
+        return True
     return False
 
 
@@ -177,10 +187,10 @@ def _career_evidence_score(candidate: dict, result: StructuralResult, narrative:
     ]
 
     # Tier-1 company check: has the candidate worked at a high-signal product
-    # company at any point in their career? Matched as a lowercase substring.
+    # company at any point in their career? Matched with word-boundary matching.
     tier1_roles = [
         j for j in history
-        if any(t1 in (j.get("company") or "").lower() for t1 in config.TIER_1_COMPANIES)
+        if _TIER_1_COMPANIES_REGEX.search((j.get("company") or "").lower())
     ]
 
     score = 0.0
@@ -333,17 +343,19 @@ def _apply_penalties(candidate: dict, base: float, result: StructuralResult, nar
     # Keyword stuffer: JD-perfect skill list attached to a non-technical
     # career. "A candidate who has all the AI keywords listed as skills but
     # whose title is 'Marketing Manager' is not a fit."
-    jd_skill_count = sum(
-        1 for s in candidate.get("skills", []) or []
-        if any(jd in (s.get("name") or "").lower() for jd in config.JD_SKILLS)
-    )
     non_tech_title = _contains_any(title, config.NON_TECH_TITLE_TERMS)
-    no_real_evidence = _count_hits(narrative, config.RETRIEVAL_EVIDENCE_TERMS) == 0 and \
-        _count_hits(narrative, config.ML_EVIDENCE_TERMS) == 0
-    if non_tech_title and jd_skill_count >= config.KEYWORD_STUFFER_MIN_JD_SKILLS and no_real_evidence:
-        result.penalties.append("keyword_stuffer")
-        result.concerns.append(f"AI skill list doesn't match a '{profile.get('current_title')}' career")
-        return base * config.PENALTY_KEYWORD_STUFFER
+    if non_tech_title:
+        jd_skill_count = sum(
+            1 for s in candidate.get("skills", []) or []
+            if _skill_matches_jd((s.get("name") or "").lower())
+        )
+        if jd_skill_count >= config.KEYWORD_STUFFER_MIN_JD_SKILLS:
+            no_real_evidence = _count_hits(narrative, config.RETRIEVAL_EVIDENCE_TERMS) == 0 and \
+                _count_hits(narrative, config.ML_EVIDENCE_TERMS) == 0
+            if no_real_evidence:
+                result.penalties.append("keyword_stuffer")
+                result.concerns.append(f"AI skill list doesn't match a '{profile.get('current_title')}' career")
+                return base * config.PENALTY_KEYWORD_STUFFER
 
     # Consulting-only career ("entire career" at services firms; prior
     # product experience redeems).
@@ -389,15 +401,15 @@ def _apply_penalties(candidate: dict, base: float, result: StructuralResult, nar
     full_text = f"{narrative} {skills_text}"
     cv_hits = _count_hits(full_text, config.CV_SPEECH_ROBOTICS_TERMS)
     # Only count multi-word or unambiguous NLP/IR terms to avoid false positives.
-    # (Module-level constant _NLP_POSITIVE_TERMS — not rebuilt per candidate.)
-    nlp_hits = sum(
-        1 for t in _NLP_POSITIVE_TERMS
-        if re.search(r'\b' + re.escape(t) + r'\b', full_text)
-    )
-    if cv_hits >= 3 and nlp_hits == 0:
-        result.penalties.append("cv_only")
-        result.concerns.append("primary expertise in CV/speech/robotics with no NLP/IR exposure")
-        base *= config.PENALTY_CV_ONLY
+    if cv_hits >= 3:
+        nlp_hits = sum(
+            1 for pat in _NLP_POSITIVE_COMPILED
+            if pat.search(full_text)
+        )
+        if nlp_hits == 0:
+            result.penalties.append("cv_only")
+            result.concerns.append("primary expertise in CV/speech/robotics with no NLP/IR exposure")
+            base *= config.PENALTY_CV_ONLY
 
     # LangChain-only disqualifier: "if your AI experience consists primarily
     # of recent (<12 months) projects using LangChain to call OpenAI — we
@@ -407,34 +419,28 @@ def _apply_penalties(candidate: dict, base: float, result: StructuralResult, nar
     # is no evidence of pre-LLM ML work. We use only unambiguous, specific
     # pre-LLM terms so that negating phrases like "no retrieval systems" don't
     # accidentally register as positive pre-LLM evidence.
-    # Module-level constants (not rebuilt per candidate).
-    # _LANGCHAIN_TERMS and _PRE_LLM_TERMS are defined at the top of this module.
-    # Note: vector DBs (faiss, pinecone, weaviate, qdrant, milvus) are intentionally
-    # NOT in _PRE_LLM_TERMS. A LangChain-Pinecone RAG demo uses Pinecone as a
-    # convenience wrapper — it is not evidence of pre-LLM ML production experience.
     lc_in_narrative = _contains_any(narrative, _LANGCHAIN_TERMS)
-    pre_llm_hits = _count_hits(narrative, _PRE_LLM_TERMS)
-    lc_skill_months = sum(
-        s.get("duration_months", 0) or 0
-        for s in candidate.get("skills", []) or []
-        if any(t in (s.get("name") or "").lower() for t in ("langchain", "openai", "gpt", "chatgpt"))
-    )
-    non_lc_ml_months = sum(
-        s.get("duration_months", 0) or 0
-        for s in candidate.get("skills", []) or []
-        if (_skill_matches_jd((s.get("name") or "").lower())
-            and not any(t in (s.get("name") or "").lower()
-                        for t in ("langchain", "openai", "gpt", "chatgpt")))
-    )
-    if (lc_in_narrative
-            and lc_skill_months > 0
-            and non_lc_ml_months < 12
-            and pre_llm_hits == 0):
-        result.penalties.append("langchain_only")
-        result.concerns.append(
-            "ML experience appears limited to recent LLM-wrapper work with no pre-LLM production history"
-        )
-        base *= 0.35
+    if lc_in_narrative:
+        pre_llm_hits = _count_hits(narrative, _PRE_LLM_TERMS)
+        if pre_llm_hits == 0:
+            lc_skill_months = sum(
+                s.get("duration_months", 0) or 0
+                for s in candidate.get("skills", []) or []
+                if any(t in (s.get("name") or "").lower() for t in ("langchain", "openai", "gpt", "chatgpt"))
+            )
+            non_lc_ml_months = sum(
+                s.get("duration_months", 0) or 0
+                for s in candidate.get("skills", []) or []
+                if (_skill_matches_jd((s.get("name") or "").lower())
+                    and not any(t in (s.get("name") or "").lower()
+                                for t in ("langchain", "openai", "gpt", "chatgpt")))
+            )
+            if lc_skill_months > 0 and non_lc_ml_months < 12:
+                result.penalties.append("langchain_only")
+                result.concerns.append(
+                    "ML experience appears limited to recent LLM-wrapper work with no pre-LLM production history"
+                )
+                base *= 0.35
 
     # Outside India: the JD takes these "case-by-case", doesn't sponsor
     # visas, and its ideal profile is "located in or willing to relocate to
