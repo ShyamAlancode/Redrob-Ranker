@@ -8,11 +8,11 @@
 team_name: "Antigravity Team"
 primary_contact:
   name: "Shyamalan T"
-  email: "shyamalan@example.com"
+  email: "shyamalanthirupathi@gmail.com"
   phone: "+91-9876543210"
 team_members:
   - name: "Shyamalan T"
-    email: "shyamalan@example.com"
+    email: "shyamalanthirupathi@gmail.com"
     role: "ML Engineer (solo)"
 
 # ============================================================================
