@@ -78,17 +78,15 @@ def select_top(candidates: Iterator[dict],
             skipped += 1
             continue
         scored = score_candidate(record, sem)
-        # Store (-final_score, candidate_id, scored) in a min-heap.
-        # Negating the score turns the min-heap into an effective max-heap:
-        # heappop() removes the entry with the *smallest* negated score, i.e.
-        # the *lowest* final score — exactly the candidate we want to evict.
-        # On equal final scores, candidate_id sorts ascending naturally, so
-        # the *largest* id is evicted first, preserving the spec's tie-break
-        # rule (ascending candidate_id in the output CSV).
-        entry = (-scored.final, cid, scored)
+        # Store (final_score, candidate_id, scored) in a min-heap.
+        # Since heapq is a min-heap, heap[0] will always hold the candidate
+        # with the lowest score currently in the heap.
+        # If a new candidate has a higher score than heap[0], we evict heap[0]
+        # and push the new candidate.
+        entry = (scored.final, cid, scored)
         if len(heap) < limit:
             heapq.heappush(heap, entry)
-        elif entry < heap[0]:  # new entry has higher final score (less negative)
+        elif entry > heap[0]:  # new entry has higher final score
             heapq.heapreplace(heap, entry)
 
     if skipped:

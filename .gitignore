@@ -7,17 +7,15 @@ venv/
 *.egg-info/
 
 # Dataset (465 MB uncompressed — never belongs in git)
-candidates.jsonl
-candidates.jsonl.gz
+candidates*.jsonl
+candidates*.jsonl.gz
 
 # Large embedding matrix (~290 MB float32, over GitHub's 100 MB file limit).
 # Regenerated deterministically by embed.py -- see README "Artifacts".
 artifacts/candidate_embeddings.npy
 
 # Local outputs
-sandbox_output.csv
-submission*.csv
-team_*.csv
+*.csv
 
 # OS / editor noise
 .DS_Store

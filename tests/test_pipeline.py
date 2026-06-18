@@ -564,3 +564,29 @@ def test_title_evidence_phrases_rotate():
         if r.evidence:
             seen_phrases.add(r.evidence[0])
     assert len(seen_phrases) >= 2, f"phrases not rotating: {seen_phrases}"
+
+
+def test_heap_replacement_correctness():
+    """Verify that select_top correctly evicts low scores and keeps the highest ones
+    when the candidate pool size exceeds the heap limit (top_k * pool_factor)."""
+    # Create 350 candidates (limit is 100 * 3 = 300).
+    # The first 300 candidates will have low semantic scores (e.g. 0.1).
+    # The last 50 candidates will have high semantic scores (e.g. 0.9).
+    # The selection must correctly identify the high-scoring candidates.
+    candidates = []
+    lookup_dict = {}
+    for i in range(1, 351):
+        cid = f"CAND_{i:07d}"
+        candidates.append(make_candidate(cid=cid))
+        if i <= 300:
+            lookup_dict[cid] = 0.1
+        else:
+            lookup_dict[cid] = 0.9
+
+    ranked = select_top(iter(candidates), lookup_dict.get, top_k=10)
+    # The top 10 should all be from the last 50 candidates (CAND_0000301 to CAND_0000350)
+    # with high semantic scores.
+    assert len(ranked) == 10
+    for sc in ranked:
+        assert int(sc.candidate_id.split("_")[1]) > 300
+        assert sc.semantic == 0.9
