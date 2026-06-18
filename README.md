@@ -138,7 +138,7 @@ artifacts/                embedding artifacts written by embed.py
 |---|---|---|
 | `jd_embedding.npy` | 1.5 KB | yes |
 | `candidate_ids.json` | ~1.3 MB | yes |
-| `candidate_embeddings.npy` | ~290 MB (float32) | **no** — exceeds GitHub's 100 MB file limit |
+| `candidate_embeddings.npy` | ~153.6 MB (float32) or ~76.8 MB (float16) | **no** — large binary data file |
 
 The embedding matrix is regenerated deterministically by the documented
 pre-computation command above (spec §10.3 allows "a script that produces
