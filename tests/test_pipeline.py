@@ -590,3 +590,30 @@ def test_heap_replacement_correctness():
     for sc in ranked:
         assert int(sc.candidate_id.split("_")[1]) > 300
         assert sc.semantic == 0.9
+
+
+def test_behavioral_exponential_decay():
+    """Verify that last active date uses exponential decay using config lambda."""
+    from ranker.behavioral import behavioral_multiplier
+    c_active = make_candidate()
+    c_active["redrob_signals"]["last_active_date"] = "2026-05-30"  # 2 days inactive
+    c_inactive = make_candidate()
+    c_inactive["redrob_signals"]["last_active_date"] = "2026-03-01"  # 92 days inactive
+    
+    m_active = behavioral_multiplier(c_active)
+    m_inactive = behavioral_multiplier(c_inactive)
+    
+    assert m_active.multiplier > m_inactive.multiplier
+
+
+def test_semantic_structural_contradiction_check():
+    """Verify that a high structural score combined with a low semantic score triggers a contradiction check flag."""
+    c = make_candidate()
+    # High structural score candidate (perfect fit candidate) scored with a very low semantic similarity (e.g. 0.05)
+    sc = score_candidate(c, 0.05)
+    
+    # structural score is high (~0.9+), semantic is 0.05, delta > 0.45.
+    # Should trigger contradiction flag and apply severe multiplier.
+    assert any("semantic-structural contradiction" in flag for flag in sc.integrity.hard_flags)
+    assert sc.integrity.multiplier == 0.10  # single hard flag multiplier
+

@@ -283,3 +283,11 @@ LOCATION_ABROAD = 0.20  # "case-by-case, but we don't sponsor work visas"
 
 NOTICE_STEPS = [(30, 1.00), (60, 0.85), (90, 0.70)]
 NOTICE_LONG = 0.55  # > 90 days: "the bar gets higher"
+
+# ---------------------------------------------------------------------------
+# Optimizations (Exponential decay & Contradiction Audits)
+# ---------------------------------------------------------------------------
+BEHAVIORAL_DECAY_LAMBDA = 0.0077  # e^(-lambda * 90) ~ 0.50 (90-day half-life)
+CONTRADICTION_DELTA_THRESHOLD = 0.45  # structural - semantic delta threshold
+CONTRADICTION_PENALTY = 0.20  # penalty applied if delta exceeds threshold
+

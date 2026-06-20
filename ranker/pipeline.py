@@ -38,6 +38,13 @@ def score_candidate(record: dict, semantic_norm: float) -> ScoredCandidate:
     behavioral = behavioral_multiplier(record)
     integrity = check_integrity(record)
 
+    # Semantic-structural contradiction audit (detect keyword stuffers with low semantic relevance)
+    delta = structural.score - semantic_norm
+    if delta > config.CONTRADICTION_DELTA_THRESHOLD:
+        integrity.hard_flags.append(
+            f"semantic-structural contradiction (delta {delta:.2f})"
+        )
+
     base = config.W_SEMANTIC * semantic_norm + config.W_STRUCTURAL * structural.score
     final = base * behavioral.multiplier * integrity.multiplier
 
