@@ -1,0 +1,3 @@
+# Minimal dependencies for the timed ranking step (rank.py)
+# Satisfies the zero-ML-footprint and strict offline compute constraints
+numpy==1.26.4

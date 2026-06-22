@@ -41,7 +41,8 @@ def main() -> None:
 
     # Prevent PyTorch from oversubscribing threads on CPU (particularly on Windows)
     # which causes thread thrashing and massive context switching overhead.
-    # Limiting PyTorch to 1 CPU thread keeps execution deterministic and highly performant.
+    # Note: Limiting PyTorch to 1 CPU thread keeps execution deterministic and reproducible
+    # across runs, though it trades off parallel execution speed.
     torch.set_num_threads(1)
 
     out_dir = Path(args.out_dir)
